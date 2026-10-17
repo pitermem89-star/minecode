@@ -1,12 +1,10 @@
 package com.blockmod.studio
 
 import android.content.Context
-import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -24,24 +22,13 @@ import java.io.File
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { AppTheme { AppRoot() } }
+        val theme = ThemeState(getSharedPreferences("settings", Context.MODE_PRIVATE))
+        setContent { AppTheme(theme) { AppRoot(theme) } }
     }
 }
 
 @Composable
-fun AppTheme(content: @Composable () -> Unit) {
-    val dark = isSystemInDarkTheme()
-    val colors = if (Build.VERSION.SDK_INT >= 31) {
-        val ctx = LocalContext.current
-        if (dark) dynamicDarkColorScheme(ctx) else dynamicLightColorScheme(ctx)
-    } else {
-        if (dark) darkColorScheme() else lightColorScheme()
-    }
-    MaterialTheme(colorScheme = colors, content = content)
-}
-
-@Composable
-fun AppRoot() {
+fun AppRoot(theme: ThemeState) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("auth", Context.MODE_PRIVATE) }
     var token by remember { mutableStateOf(prefs.getString("token", null)) }
@@ -52,7 +39,7 @@ fun AppRoot() {
             token = tk
         })
     } else {
-        MainScreen(onLogout = {
+        MainScreen(theme = theme, onLogout = {
             prefs.edit().remove("token").apply()
             token = null
         })
@@ -60,11 +47,14 @@ fun AppRoot() {
 }
 
 @Composable
-fun MainScreen(onLogout: () -> Unit) {
+fun MainScreen(theme: ThemeState, onLogout: () -> Unit) {
     val context = LocalContext.current
     var tab by remember { mutableIntStateOf(0) }
     var creating by remember { mutableStateOf(false) }
+    var editingId by remember { mutableStateOf<String?>(null) }
     var mods by remember { mutableStateOf(ModStore.load(context)) }
+
+    val editing = mods.firstOrNull { it.id == editingId }
 
     if (creating) {
         BackHandler { creating = false }
@@ -75,7 +65,18 @@ fun MainScreen(onLogout: () -> Unit) {
                 mods = updated
                 ModStore.save(context, updated)
                 creating = false
+                editingId = mod.id
             }
+        )
+    } else if (editing != null) {
+        EditorScreen(
+            mod = editing,
+            onChange = { m ->
+                val updated = mods.map { if (it.id == m.id) m else it }
+                mods = updated
+                ModStore.save(context, updated)
+            },
+            onBack = { editingId = null }
         )
     } else {
         Scaffold(
@@ -113,6 +114,7 @@ fun MainScreen(onLogout: () -> Unit) {
                 when (tab) {
                     0 -> HomeScreen(
                         mods = mods,
+                        onOpen = { editingId = it.id },
                         onDelete = { mod ->
                             mod.avatarPath?.let { File(it).delete() }
                             val updated = mods.filter { it.id != mod.id }
@@ -121,7 +123,7 @@ fun MainScreen(onLogout: () -> Unit) {
                         }
                     )
                     1 -> ModsScreen()
-                    else -> SettingsScreen(onLogout = onLogout)
+                    else -> SettingsScreen(theme = theme, onLogout = onLogout)
                 }
             }
         }
