@@ -102,16 +102,21 @@ fun LoginScreen() {
 
                 while (System.currentTimeMillis() < deadline) {
                     delay(interval * 1000L)
-                    val t = withContext(Dispatchers.IO) {
-                        post(
-                            "https://github.com/login/oauth/access_token",
-                            mapOf(
-                                "client_id" to CLIENT_ID,
-                                "device_code" to deviceCode,
-                                "grant_type" to "urn:ietf:params:oauth:grant-type:device_code"
+                    val t = try {
+                        withContext(Dispatchers.IO) {
+                            post(
+                                "https://github.com/login/oauth/access_token",
+                                mapOf(
+                                    "client_id" to CLIENT_ID,
+                                    "device_code" to deviceCode,
+                                    "grant_type" to "urn:ietf:params:oauth:grant-type:device_code"
+                                )
                             )
-                        )
+                        }
+                    } catch (e: Exception) {
+                        null
                     }
+                    if (t == null) continue
                     if (t.has("access_token")) {
                         val tk = t.getString("access_token")
                         prefs.edit().putString("token", tk).apply()
