@@ -14,7 +14,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
@@ -51,8 +50,13 @@ fun ModAvatar(path: String?, name: String, size: Dp) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(mods: List<ModProject>, onDelete: (ModProject) -> Unit) {
+fun HomeScreen(
+    mods: List<ModProject>,
+    onOpen: (ModProject) -> Unit,
+    onDelete: (ModProject) -> Unit
+) {
     var toDelete by remember { mutableStateOf<ModProject?>(null) }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
@@ -75,7 +79,7 @@ fun HomeScreen(mods: List<ModProject>, onDelete: (ModProject) -> Unit) {
                 contentPadding = PaddingValues(bottom = 88.dp)
             ) {
                 items(mods, key = { it.id }) { mod ->
-                    Card(Modifier.fillMaxWidth()) {
+                    Card(onClick = { onOpen(mod) }, modifier = Modifier.fillMaxWidth()) {
                         Row(
                             Modifier.padding(16.dp),
                             verticalAlignment = Alignment.CenterVertically
@@ -85,7 +89,7 @@ fun HomeScreen(mods: List<ModProject>, onDelete: (ModProject) -> Unit) {
                             Column(Modifier.weight(1f)) {
                                 Text(mod.name, style = MaterialTheme.typography.titleMedium)
                                 Text(
-                                    "Minecraft ${mod.mcVersion}",
+                                    "${mod.loader} · Minecraft ${mod.mcVersion}",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.primary
                                 )
@@ -123,55 +127,5 @@ fun HomeScreen(mods: List<ModProject>, onDelete: (ModProject) -> Unit) {
                 TextButton(onClick = { toDelete = null }) { Text("Отмена") }
             }
         )
-    }
-}
-
-@Composable
-fun ModsScreen() {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        item { Text("Моды", style = MaterialTheme.typography.headlineMedium) }
-        item { Text("От сообщества", style = MaterialTheme.typography.titleMedium) }
-        item {
-            Card(Modifier.fillMaxWidth()) {
-                Text(
-                    "Скоро здесь появятся моды других пользователей приложения.",
-                    modifier = Modifier.padding(16.dp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-        item { Text("Другие моды", style = MaterialTheme.typography.titleMedium) }
-        items(otherMods) { m ->
-            Card(Modifier.fillMaxWidth()) {
-                ListItem(
-                    headlineContent = { Text(m.name) },
-                    supportingContent = { Text(m.description) },
-                    leadingContent = { ModAvatar(null, m.name, 48.dp) },
-                    colors = ListItemDefaults.colors(containerColor = Color.Transparent)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun SettingsScreen(onLogout: () -> Unit) {
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Text(
-            "Настройки",
-            style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.padding(bottom = 24.dp)
-        )
-        Text("Аккаунт GitHub", style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(4.dp))
-        Text("Подключён ✅", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(16.dp))
-        OutlinedButton(onClick = onLogout) { Text("Выйти из GitHub") }
-        Spacer(Modifier.height(32.dp))
-        Text("Версия приложения 0.2", style = MaterialTheme.typography.bodySmall)
     }
 }
