@@ -13,17 +13,38 @@ data class ModProject(
     val id: String,
     val name: String,
     val mcVersion: String,
+    val loader: String,
     val description: String,
-    val avatarPath: String?
+    val avatarPath: String?,
+    val blocks: String,
+    val code: String
 )
 
-data class ExternalMod(val name: String, val description: String)
+data class ModBlock(val type: String, val a: String, val b: String)
 
-val otherMods = listOf(
-    ExternalMod("Sodium", "Ускоряет графику и повышает FPS (Fabric)")
-)
+val loaders = listOf("Fabric", "Forge")
 
-val mcVersions = listOf("1.21.4", "1.21.1", "1.20.4", "1.20.1", "1.19.4", "1.18.2", "1.16.5")
+val fallbackVersions = listOf("1.21.4", "1.21.1", "1.20.4", "1.20.1", "1.19.4", "1.18.2", "1.16.5")
+
+fun parseBlocks(json: String): List<ModBlock> {
+    return try {
+        val arr = JSONArray(json)
+        (0 until arr.length()).map { i ->
+            val o = arr.getJSONObject(i)
+            ModBlock(o.getString("type"), o.optString("a", ""), o.optString("b", ""))
+        }
+    } catch (e: Exception) {
+        emptyList()
+    }
+}
+
+fun blocksToJson(list: List<ModBlock>): String {
+    val arr = JSONArray()
+    list.forEach { b ->
+        arr.put(JSONObject().put("type", b.type).put("a", b.a).put("b", b.b))
+    }
+    return arr.toString()
+}
 
 object ModStore {
     private const val PREFS = "mods"
@@ -40,8 +61,11 @@ object ModStore {
                     id = o.getString("id"),
                     name = o.getString("name"),
                     mcVersion = o.getString("mcVersion"),
+                    loader = o.optString("loader", "Fabric"),
                     description = o.optString("description", ""),
-                    avatarPath = if (o.isNull("avatarPath")) null else o.getString("avatarPath")
+                    avatarPath = if (o.isNull("avatarPath")) null else o.getString("avatarPath"),
+                    blocks = o.optString("blocks", "[]"),
+                    code = o.optString("code", "")
                 )
             }
         } catch (e: Exception) {
@@ -56,8 +80,11 @@ object ModStore {
             o.put("id", m.id)
             o.put("name", m.name)
             o.put("mcVersion", m.mcVersion)
+            o.put("loader", m.loader)
             o.put("description", m.description)
             o.put("avatarPath", m.avatarPath ?: JSONObject.NULL)
+            o.put("blocks", m.blocks)
+            o.put("code", m.code)
             arr.put(o)
         }
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
