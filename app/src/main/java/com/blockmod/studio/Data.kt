@@ -1,0 +1,87 @@
+package com.blockmod.studio
+
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+import java.io.FileOutputStream
+
+data class ModProject(
+    val id: String,
+    val name: String,
+    val mcVersion: String,
+    val description: String,
+    val avatarPath: String?
+)
+
+data class ExternalMod(val name: String, val description: String)
+
+val otherMods = listOf(
+    ExternalMod("Sodium", "Ускоряет графику и повышает FPS (Fabric)")
+)
+
+val mcVersions = listOf("1.21.4", "1.21.1", "1.20.4", "1.20.1", "1.19.4", "1.18.2", "1.16.5")
+
+object ModStore {
+    private const val PREFS = "mods"
+    private const val KEY = "list"
+
+    fun load(context: Context): List<ModProject> {
+        return try {
+            val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(KEY, "[]") ?: "[]"
+            val arr = JSONArray(raw)
+            (0 until arr.length()).map { i ->
+                val o = arr.getJSONObject(i)
+                ModProject(
+                    id = o.getString("id"),
+                    name = o.getString("name"),
+                    mcVersion = o.getString("mcVersion"),
+                    description = o.optString("description", ""),
+                    avatarPath = if (o.isNull("avatarPath")) null else o.getString("avatarPath")
+                )
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    fun save(context: Context, list: List<ModProject>) {
+        val arr = JSONArray()
+        list.forEach { m ->
+            val o = JSONObject()
+            o.put("id", m.id)
+            o.put("name", m.name)
+            o.put("mcVersion", m.mcVersion)
+            o.put("description", m.description)
+            o.put("avatarPath", m.avatarPath ?: JSONObject.NULL)
+            arr.put(o)
+        }
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putString(KEY, arr.toString()).apply()
+    }
+}
+
+// Копирует выбранную картинку в память приложения и уменьшает её
+fun saveAvatar(context: Context, uri: Uri, id: String): String? {
+    return try {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, bounds)
+        }
+        var sample = 1
+        while (bounds.outWidth / sample > 600 || bounds.outHeight / sample > 600) sample *= 2
+        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+        val bmp = context.contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, opts)
+        } ?: return null
+        val file = File(context.filesDir, "avatar_${id}_${System.currentTimeMillis()}.png")
+        FileOutputStream(file).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        file.absolutePath
+    } catch (e: Exception) {
+        null
+    }
+}
