@@ -1,4 +1,4 @@
-package com.minecode.studio
+package com.blockmod.studio
 
 import android.content.Context
 import android.os.Build
