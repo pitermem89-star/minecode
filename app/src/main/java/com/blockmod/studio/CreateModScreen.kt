@@ -26,11 +26,21 @@ fun CreateModScreen(onBack: () -> Unit, onSave: (ModProject) -> Unit) {
     val context = LocalContext.current
     val id = remember { UUID.randomUUID().toString() }
 
+    var versions by remember { mutableStateOf(loadCachedVersions(context)) }
     var name by remember { mutableStateOf("") }
-    var version by remember { mutableStateOf(mcVersions.first()) }
+    var version by remember { mutableStateOf(versions.first()) }
+    var loader by remember { mutableStateOf(loaders.first()) }
     var description by remember { mutableStateOf("") }
     var avatarPath by remember { mutableStateOf<String?>(null) }
     var expanded by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        val fresh = fetchReleaseVersions()
+        if (fresh != null) {
+            versions = fresh
+            saveCachedVersions(context, fresh)
+        }
+    }
 
     val picker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia()
@@ -92,6 +102,26 @@ fun CreateModScreen(onBack: () -> Unit, onSave: (ModProject) -> Unit) {
             )
             Spacer(Modifier.height(16.dp))
 
+            Text(
+                "Загрузчик модов",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                loaders.forEach { l ->
+                    FilterChip(
+                        selected = loader == l,
+                        onClick = { loader = l },
+                        label = { Text(l) }
+                    )
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+
             ExposedDropdownMenuBox(
                 expanded = expanded,
                 onExpandedChange = { expanded = it }
@@ -108,7 +138,7 @@ fun CreateModScreen(onBack: () -> Unit, onSave: (ModProject) -> Unit) {
                     expanded = expanded,
                     onDismissRequest = { expanded = false }
                 ) {
-                    mcVersions.forEach { v ->
+                    versions.forEach { v ->
                         DropdownMenuItem(
                             text = { Text(v) },
                             onClick = {
@@ -137,8 +167,11 @@ fun CreateModScreen(onBack: () -> Unit, onSave: (ModProject) -> Unit) {
                             id = id,
                             name = name.trim(),
                             mcVersion = version,
+                            loader = loader,
                             description = description.trim(),
-                            avatarPath = avatarPath
+                            avatarPath = avatarPath,
+                            blocks = "[]",
+                            code = ""
                         )
                     )
                 },
