@@ -1,13 +1,7 @@
 package com.blockmod.studio
 
-import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.net.Uri
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.File
-import java.io.FileOutputStream
 
 data class ModProject(
     val id: String,
@@ -44,7 +38,6 @@ private fun parseBlock(o: JSONObject): ModBlock? {
     }
     return when {
         type.isEmpty() -> null
-        // старый формат: команда и вход в мир
         type == "command" && kids.isEmpty() -> ModBlock(
             "on_command", a, "",
             if (b.isBlank()) emptyList() else listOf(ModBlock("say", b))
@@ -82,37 +75,3 @@ fun blocksToJson(list: List<ModBlock>): String {
     list.forEach { arr.put(blockToJson(it)) }
     return arr.toString()
 }
-
-object ModStore {
-    private const val PREFS = "mods"
-    private const val KEY = "list"
-
-    fun load(context: Context): List<ModProject> {
-        return try {
-            val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .getString(KEY, "[]") ?: "[]"
-            val arr = JSONArray(raw)
-            (0 until arr.length()).map { i ->
-                val o = arr.getJSONObject(i)
-                ModProject(
-                    id = o.getString("id"),
-                    name = o.getString("name"),
-                    mcVersion = o.getString("mcVersion"),
-                    loader = o.optString("loader", "Fabric"),
-                    description = o.optString("description", ""),
-                    avatarPath = if (o.isNull("avatarPath")) null else o.getString("avatarPath"),
-                    blocks = o.optString("blocks", "[]"),
-                    code = o.optString("code", "").let { c ->
-                        // код, который создавал старый редактор, сбрасываем
-                        if (c.startsWith("// Fabric, Minecraft") || c.startsWith("// Forge, Minecraft")) "" else c
-                    }
-                )
-            }
-        } catch (e: Exception) {
-            emptyList()
-        }
-    }
-
-    fun save(context: Context, list: List<ModProject>) {
-        val arr = JSONArray()
-        l
