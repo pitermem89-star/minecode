@@ -1,6 +1,7 @@
 package com.blockmod.studio
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -8,7 +9,6 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -18,9 +18,15 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
+import kotlin.math.abs
 
 // kind: 0 событие, 1 объявление, 2 управление, 3 действие
 class BlockSpec(
@@ -86,6 +92,12 @@ fun BlocksTab(blocks: List<ModBlock>, onChange: (List<ModBlock>) -> Unit) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Зажми блок пальцем и тащи: вверх или вниз, чтобы переставить, далеко в сторону, чтобы удалить.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         Spacer(Modifier.height(12.dp))
         BlockList(blocks, true, onChange)
         Spacer(Modifier.height(80.dp))
@@ -94,43 +106,108 @@ fun BlocksTab(blocks: List<ModBlock>, onChange: (List<ModBlock>) -> Unit) {
 
 @Composable
 fun BlockList(blocks: List<ModBlock>, top: Boolean, onChange: (List<ModBlock>) -> Unit) {
+    val density = LocalDensity.current
+    val latestBlocks by rememberUpdatedState(blocks)
+    val latestOnChange by rememberUpdatedState(onChange)
+    val heights = remember { mutableStateMapOf<Long, Int>() }
+    var dragUid by remember { mutableStateOf<Long?>(null) }
+    var dragX by remember { mutableFloatStateOf(0f) }
+    var dragY by remember { mutableFloatStateOf(0f) }
+    val deleteDistance = with(density) { 110.dp.toPx() }
+    val gap = with(density) { 6.dp.toPx() }
+
+    fun reorder(uid: Long) {
+        val list = latestBlocks
+        val idx = list.indexOfFirst { it.uid == uid }
+        if (idx < 0) return
+        if (dragY > 0 && idx < list.lastIndex) {
+            val h = (heights[list[idx + 1].uid] ?: 0) + gap
+            if (dragY > h / 2) {
+                latestOnChange(list.swap(idx, idx + 1))
+                dragY -= h
+            }
+        } else if (dragY < 0 && idx > 0) {
+            val h = (heights[list[idx - 1].uid] ?: 0) + gap
+            if (-dragY > h / 2) {
+                latestOnChange(list.swap(idx, idx - 1))
+                dragY += h
+            }
+        }
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         blocks.forEachIndexed { index, b ->
-            val spec = specOf(b.type) ?: return@forEachIndexed
-            val up: (() -> Unit)? =
-                if (index > 0) ({ onChange(blocks.swap(index, index - 1)) }) else null
-            val down: (() -> Unit)? =
-                if (index < blocks.lastIndex) ({ onChange(blocks.swap(index, index + 1)) }) else null
-
-            BrickView(
-                spec = spec,
-                block = b,
-                onBlock = { nb -> onChange(blocks.replaceAt(index, nb)) },
-                onUp = up,
-                onDown = down,
-                onDelete = { onChange(blocks.filterIndexed { i, _ -> i != index }) }
-            )
-            if (spec.hasBody) {
-                val barColor = spec.color
-                Column(
-                    modifier = Modifier
-                        .padding(start = 14.dp)
-                        .drawBehind {
-                            drawRect(
-                                barColor,
-                                topLeft = Offset.Zero,
-                                size = Size(5.dp.toPx(), size.height)
-                            )
+            key(b.uid) {
+                val spec = specOf(b.type)
+                if (spec != null) {
+                    val isDrag = dragUid == b.uid
+                    val armed = isDrag && abs(dragX) > deleteDistance
+                    val dragMod = Modifier.pointerInput(b.uid) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = {
+                                dragUid = b.uid
+                                dragX = 0f
+                                dragY = 0f
+                            },
+                            onDrag = { change, amount ->
+                                change.consume()
+                                dragX += amount.x
+                                dragY += amount.y
+                                reorder(b.uid)
+                            },
+                            onDragEnd = {
+                                if (abs(dragX) > deleteDistance) {
+                                    latestOnChange(latestBlocks.filter { it.uid != b.uid })
+                                }
+                                dragUid = null
+                                dragX = 0f
+                                dragY = 0f
+                            },
+                            onDragCancel = {
+                                dragUid = null
+                                dragX = 0f
+                                dragY = 0f
+                            }
+                        )
+                    }
+                    Column(
+                        modifier = Modifier
+                            .onSizeChanged { heights[b.uid] = it.height }
+                            .zIndex(if (isDrag) 1f else 0f)
+                            .graphicsLayer {
+                                translationY = if (isDrag) dragY else 0f
+                                translationX = if (isDrag) dragX else 0f
+                                alpha = if (armed) 0.6f else 1f
+                            },
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        BrickView(spec, b, armed, dragMod) { nb ->
+                            onChange(blocks.replaceAt(index, nb))
                         }
-                        .padding(start = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    BlockList(b.kids, false) { nk ->
-                        onChange(blocks.replaceAt(index, b.copy(kids = nk)))
+                        if (spec.hasBody) {
+                            val barColor = spec.color
+                            Column(
+                                modifier = Modifier
+                                    .padding(start = 14.dp)
+                                    .drawBehind {
+                                        drawRect(
+                                            barColor,
+                                            topLeft = Offset.Zero,
+                                            size = Size(5.dp.toPx(), size.height)
+                                        )
+                                    }
+                                    .padding(start = 12.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                BlockList(b.kids, false) { nk ->
+                                    onChange(blocks.replaceAt(index, b.copy(kids = nk)))
+                                }
+                            }
+                        }
+                        if (top) Spacer(Modifier.height(8.dp))
                     }
                 }
             }
-            if (top) Spacer(Modifier.height(8.dp))
         }
         AddBlockButton(top) { onChange(blocks + it) }
     }
@@ -164,19 +241,19 @@ fun AddBlockButton(top: Boolean, onAdd: (ModBlock) -> Unit) {
 fun BrickView(
     spec: BlockSpec,
     block: ModBlock,
-    onBlock: (ModBlock) -> Unit,
-    onUp: (() -> Unit)?,
-    onDown: (() -> Unit)?,
-    onDelete: () -> Unit
+    armed: Boolean,
+    dragModifier: Modifier,
+    onBlock: (ModBlock) -> Unit
 ) {
-    var menu by remember { mutableStateOf(false) }
     Surface(
-        color = spec.color,
+        color = if (armed) Color(0xFFD32F2F) else spec.color,
         shape = RoundedCornerShape(10.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
-            Modifier.padding(start = 12.dp, top = 4.dp, bottom = 4.dp),
+            Modifier
+                .then(dragModifier)
+                .padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             FlowRow(
@@ -190,32 +267,11 @@ fun BrickView(
                         "{b}" -> InlineField(block.b, spec.hintB) { onBlock(block.copy(b = it)) }
                         else -> Text(
                             t,
-                            color = spec.textColor,
+                            color = if (armed) Color.White else spec.textColor,
                             fontSize = 14.sp,
                             modifier = Modifier.padding(vertical = 6.dp)
                         )
                     }
-                }
-            }
-            Box {
-                IconButton(onClick = { menu = true }, modifier = Modifier.size(40.dp)) {
-                    Icon(Icons.Default.MoreVert, contentDescription = "Меню", tint = spec.textColor)
-                }
-                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    DropdownMenuItem(
-                        text = { Text("Вверх") },
-                        enabled = onUp != null,
-                        onClick = { menu = false; onUp?.invoke() }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Вниз") },
-                        enabled = onDown != null,
-                        onClick = { menu = false; onDown?.invoke() }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Удалить") },
-                        onClick = { menu = false; onDelete() }
-                    )
                 }
             }
         }
