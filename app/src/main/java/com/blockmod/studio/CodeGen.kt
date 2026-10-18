@@ -30,22 +30,23 @@ private fun num(s: String, min: Int, max: Int, def: Int): Int =
     (s.trim().toIntOrNull() ?: def).coerceIn(min, max)
 
 // Команды внутри скрипта. В коде всегда есть переменная player.
-private fun body(kids: List<ModBlock>, indent: String, depth: Int, out: MutableList<String>) {
+private fun body(kids: List<ModBlock>, indent: String, depth: Int, out: MutableList<String>, api: Int) {
+    val getter = if (api == 2) "getValue" else "get"
     kids.forEach { k ->
         when (k.type) {
             "say" -> out.add("${indent}player.sendSystemMessage(Component.literal(\"${esc(k.a)}\"));")
             "give" -> out.add(
-                "${indent}player.addItem(new ItemStack(BuiltInRegistries.ITEM.get(ResourceLocation.tryParse(\"${esc(itemId(k.a))}\")), ${num(k.b, 1, 64, 1)}));"
+                "${indent}player.addItem(new ItemStack(BuiltInRegistries.ITEM.$getter(ResourceLocation.tryParse(\"${esc(itemId(k.a))}\")), ${num(k.b, 1, 64, 1)}));"
             )
             "heal" -> out.add("${indent}player.setHealth(player.getMaxHealth());")
             "repeat" -> {
                 out.add("${indent}for (int i$depth = 0; i$depth < ${num(k.a, 0, 1000, 1)}; i$depth++) {")
-                body(k.kids, "$indent    ", depth + 1, out)
+                body(k.kids, "$indent    ", depth + 1, out, api)
                 out.add("$indent}")
             }
             "if_sneak" -> {
                 out.add("${indent}if (player.isShiftKeyDown()) {")
-                body(k.kids, "$indent    ", depth + 1, out)
+                body(k.kids, "$indent    ", depth + 1, out, api)
                 out.add("$indent}")
             }
         }
@@ -54,15 +55,44 @@ private fun body(kids: List<ModBlock>, indent: String, depth: Int, out: MutableL
 
 fun generateJava(mod: ModProject, blocks: List<ModBlock>): String {
     val modId = modIdOf(mod)
-    return if (mod.loader == "Forge") forgeCode(mod, modId, blocks) else fabricCode(mod, modId, blocks)
+    val p = profileOf(mod)
+    if (p.api == 0) return stubCode(mod, modId)
+    return if (mod.loader == "Forge") forgeCode(mod, modId, blocks)
+    else fabricCode(mod, modId, blocks, p.api)
 }
 
-private fun fabricCode(mod: ModProject, modId: String, blocks: List<ModBlock>): String {
+private fun stubCode(mod: ModProject, modId: String): String {
+    val l = ArrayList<String>()
+    l.add("// Создано BlockMod Studio (${mod.loader}, Minecraft ${mod.mcVersion})")
+    l.add("// Для этой версии блоки пока не создают код. Пиши код мода сам.")
+    l.add("package com.example.$modId;")
+    l.add("")
+    if (mod.loader == "Forge") {
+        l.add("import net.minecraftforge.fml.common.Mod;")
+        l.add("")
+        l.add("@Mod(\"$modId\")")
+        l.add("public class ModMain {")
+        l.add("    public ModMain() {")
+        l.add("    }")
+        l.add("}")
+    } else {
+        l.add("import net.fabricmc.api.ModInitializer;")
+        l.add("")
+        l.add("public class ModMain implements ModInitializer {")
+        l.add("    @Override")
+        l.add("    public void onInitialize() {")
+        l.add("    }")
+        l.add("}")
+    }
+    return l.joinToString("\n")
+}
+
+private fun fabricCode(mod: ModProject, modId: String, blocks: List<ModBlock>, api: Int): String {
     val l = ArrayList<String>()
     l.add("// Создано BlockMod Studio (Fabric, Minecraft ${mod.mcVersion})")
     l.add("package com.example.$modId;")
     l.add("")
-    listOf(
+    val imports = arrayListOf(
         "net.fabricmc.api.ModInitializer",
         "net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback",
         "net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents",
@@ -77,7 +107,12 @@ private fun fabricCode(mod: ModProject, modId: String, blocks: List<ModBlock>): 
         "net.minecraft.world.item.ItemStack",
         "net.minecraft.world.level.block.Block",
         "net.minecraft.world.level.block.state.BlockBehaviour"
-    ).forEach { l.add("import $it;") }
+    )
+    if (api == 2) {
+        imports.add("net.minecraft.core.registries.Registries")
+        imports.add("net.minecraft.resources.ResourceKey")
+    }
+    imports.forEach { l.add("import $it;") }
     l.add("")
     l.add("public class ModMain implements ModInitializer {")
     l.add("    public static final String MOD_ID = \"$modId\";")
@@ -88,25 +123,36 @@ private fun fabricCode(mod: ModProject, modId: String, blocks: List<ModBlock>): 
         when (b.type) {
             "item" -> {
                 val id = safeId(b.a, "thing")
-                l.add("        Registry.register(BuiltInRegistries.ITEM, ResourceLocation.tryParse(MOD_ID + \":$id\"), new Item(new Item.Properties()));")
+                if (api == 2) {
+                    l.add("        ResourceLocation iid_$id = ResourceLocation.tryParse(MOD_ID + \":$id\");")
+                    l.add("        Registry.register(BuiltInRegistries.ITEM, iid_$id, new Item(new Item.Properties().setId(ResourceKey.create(Registries.ITEM, iid_$id))));")
+                } else {
+                    l.add("        Registry.register(BuiltInRegistries.ITEM, ResourceLocation.tryParse(MOD_ID + \":$id\"), new Item(new Item.Properties()));")
+                }
             }
             "block" -> {
                 val id = safeId(b.a, "thing")
-                l.add("        Block blk_$id = Registry.register(BuiltInRegistries.BLOCK, ResourceLocation.tryParse(MOD_ID + \":$id\"), new Block(BlockBehaviour.Properties.of()));")
-                l.add("        Registry.register(BuiltInRegistries.ITEM, ResourceLocation.tryParse(MOD_ID + \":$id\"), new BlockItem(blk_$id, new Item.Properties()));")
+                if (api == 2) {
+                    l.add("        ResourceLocation bid_$id = ResourceLocation.tryParse(MOD_ID + \":$id\");")
+                    l.add("        Block blk_$id = Registry.register(BuiltInRegistries.BLOCK, bid_$id, new Block(BlockBehaviour.Properties.of().setId(ResourceKey.create(Registries.BLOCK, bid_$id))));")
+                    l.add("        Registry.register(BuiltInRegistries.ITEM, bid_$id, new BlockItem(blk_$id, new Item.Properties().setId(ResourceKey.create(Registries.ITEM, bid_$id))));")
+                } else {
+                    l.add("        Block blk_$id = Registry.register(BuiltInRegistries.BLOCK, ResourceLocation.tryParse(MOD_ID + \":$id\"), new Block(BlockBehaviour.Properties.of()));")
+                    l.add("        Registry.register(BuiltInRegistries.ITEM, ResourceLocation.tryParse(MOD_ID + \":$id\"), new BlockItem(blk_$id, new Item.Properties()));")
+                }
             }
             "on_command" -> {
                 l.add("        CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->")
                 l.add("            dispatcher.register(Commands.literal(\"${safeId(b.a, "hello")}\").executes(context -> {")
                 l.add("                ServerPlayer player = context.getSource().getPlayerOrException();")
-                body(b.kids, "                ", 1, l)
+                body(b.kids, "                ", 1, l, api)
                 l.add("                return 1;")
                 l.add("            })));")
             }
             "on_join" -> {
                 l.add("        ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {")
-                l.add("            ServerPlayer player = handler.player;")
-                body(b.kids, "            ", 1, l)
+                l.add("            ServerPlayer player = ${if (api == 2) "handler.getPlayer()" else "handler.player"};")
+                body(b.kids, "            ", 1, l, api)
                 l.add("        });")
             }
         }
@@ -177,7 +223,7 @@ private fun forgeCode(mod: ModProject, modId: String, blocks: List<ModBlock>): S
         commands.forEach { b ->
             l.add("        event.getDispatcher().register(Commands.literal(\"${safeId(b.a, "hello")}\").executes(context -> {")
             l.add("            ServerPlayer player = context.getSource().getPlayerOrException();")
-            body(b.kids, "            ", 1, l)
+            body(b.kids, "            ", 1, l, 1)
             l.add("            return 1;")
             l.add("        }));")
         }
@@ -190,7 +236,7 @@ private fun forgeCode(mod: ModProject, modId: String, blocks: List<ModBlock>): S
         l.add("    @SubscribeEvent")
         l.add("    public void onJoin(PlayerEvent.PlayerLoggedInEvent event) {")
         l.add("        if (!(event.getEntity() instanceof ServerPlayer player)) return;")
-        joins.forEach { b -> body(b.kids, "        ", 1, l) }
+        joins.forEach { b -> body(b.kids, "        ", 1, l, 1) }
         l.add("    }")
     }
     l.add("}")
