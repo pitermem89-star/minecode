@@ -14,11 +14,19 @@ data class ModProject(
     val code: String
 )
 
+private var uidCounter = 0L
+
+fun nextBlockUid(): Long {
+    uidCounter += 1
+    return uidCounter
+}
+
 data class ModBlock(
     val type: String,
     val a: String = "",
     val b: String = "",
-    val kids: List<ModBlock> = emptyList()
+    val kids: List<ModBlock> = emptyList(),
+    val uid: Long = nextBlockUid()
 )
 
 val loaders = listOf("Fabric", "Forge")
