@@ -1,18 +1,20 @@
 package com.blockmod.studio
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -25,24 +27,20 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
-class BlockKind(
-    val type: String,
-    val title: String,
-    val labelA: String,
-    val labelB: String?
-)
-
-val blockKinds = listOf(
-    BlockKind("item", "Новый предмет", "ID предмета (латиницей)", "Название"),
-    BlockKind("block", "Новый блок", "ID блока (латиницей)", "Название"),
-    BlockKind("command", "Команда в чате", "Имя команды (без /)", "Что ответить в чате"),
-    BlockKind("join", "Сообщение при входе в мир", "Текст сообщения", null)
-)
+class BuildUi {
+    var running by mutableStateOf(false)
+    var status by mutableStateOf("")
+    var result by mutableStateOf<BuildResult?>(null)
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditorScreen(mod: ModProject, onChange: (ModProject) -> Unit, onBack: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val buildUi = remember { BuildUi() }
     var tab by remember { mutableIntStateOf(0) }
     var blocks by remember { mutableStateOf(parseBlocks(mod.blocks)) }
     var code by remember { mutableStateOf(mod.code) }
@@ -57,6 +55,25 @@ fun EditorScreen(mod: ModProject, onChange: (ModProject) -> Unit, onBack: () -> 
     BackHandler {
         onChange(snapshot())
         onBack()
+    }
+
+    fun startBuild() {
+        val token = context.getSharedPreferences("auth", Context.MODE_PRIVATE)
+            .getString("token", null)
+        if (token == null) {
+            buildUi.result = BuildResult(false, "Нет входа в GitHub. Выйди и войди заново в настройках.", null, emptyList())
+            return
+        }
+        val snap = snapshot()
+        onChange(snap)
+        buildUi.running = true
+        buildUi.result = null
+        buildUi.status = "Начинаю…"
+        scope.launch {
+            val r = buildMod(context, token, snap, blocks) { buildUi.status = it }
+            buildUi.result = r
+            buildUi.running = false
+        }
     }
 
     Scaffold(
@@ -86,96 +103,12 @@ fun EditorScreen(mod: ModProject, onChange: (ModProject) -> Unit, onBack: () -> 
             TabRow(selectedTabIndex = tab) {
                 Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Блоки") })
                 Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Код") })
+                Tab(selected = tab == 2, onClick = { tab = 2 }, text = { Text("Сборка") })
             }
-            if (tab == 0) {
-                BlocksTab(blocks) { blocks = it }
-            } else {
-                CodeTab(mod, blocks, code) { code = it }
-            }
-        }
-    }
-}
-
-@Composable
-fun BlocksTab(blocks: List<ModBlock>, onChange: (List<ModBlock>) -> Unit) {
-    var menu by remember { mutableStateOf(false) }
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        if (blocks.isEmpty()) {
-            item {
-                Text(
-                    "Блоков пока нет. Нажми «Добавить блок».",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-        itemsIndexed(blocks) { index, b ->
-            val kind = blockKinds.firstOrNull { it.type == b.type } ?: return@itemsIndexed
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            kind.title,
-                            style = MaterialTheme.typography.titleMedium,
-                            modifier = Modifier.weight(1f)
-                        )
-                        IconButton(onClick = {
-                            onChange(blocks.filterIndexed { i, _ -> i != index })
-                        }) {
-                            Icon(Icons.Default.Delete, contentDescription = "Удалить блок")
-                        }
-                    }
-                    OutlinedTextField(
-                        value = b.a,
-                        onValueChange = { v ->
-                            onChange(blocks.mapIndexed { i, x -> if (i == index) x.copy(a = v) else x })
-                        },
-                        label = { Text(kind.labelA) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    if (kind.labelB != null) {
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = b.b,
-                            onValueChange = { v ->
-                                onChange(blocks.mapIndexed { i, x -> if (i == index) x.copy(b = v) else x })
-                            },
-                            label = { Text(kind.labelB) },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                }
-            }
-        }
-        item {
-            Box {
-                Button(onClick = { menu = true }) {
-                    Icon(Icons.Default.Add, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Добавить блок")
-                }
-                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    blockKinds.forEach { k ->
-                        DropdownMenuItem(
-                            text = { Text(k.title) },
-                            onClick = {
-                                onChange(blocks + ModBlock(k.type, "", ""))
-                                menu = false
-                            }
-                        )
-                    }
-                }
+            when (tab) {
+                0 -> BlocksTab(blocks) { blocks = it }
+                1 -> CodeTab(mod, blocks, code) { code = it }
+                else -> BuildTab(mod, buildUi) { startBuild() }
             }
         }
     }
@@ -183,11 +116,8 @@ fun BlocksTab(blocks: List<ModBlock>, onChange: (List<ModBlock>) -> Unit) {
 
 @Composable
 fun CodeTab(mod: ModProject, blocks: List<ModBlock>, code: String, onCode: (String) -> Unit) {
-    var confirm by remember { mutableStateOf(false) }
-
-    LaunchedEffect(Unit) {
-        if (code.isBlank()) onCode(generateJava(mod, blocks))
-    }
+    val manual = code.isNotBlank()
+    val shown = if (manual) code else generateJava(mod, blocks)
 
     val kw = MaterialTheme.colorScheme.primary
     val str = MaterialTheme.colorScheme.tertiary
@@ -195,34 +125,86 @@ fun CodeTab(mod: ModProject, blocks: List<ModBlock>, code: String, onCode: (Stri
     val highlight = remember(kw, str, com) { JavaHighlight(kw, str, com) }
 
     Column(Modifier.fillMaxSize().padding(12.dp)) {
-        OutlinedButton(onClick = {
-            if (code.isBlank()) onCode(generateJava(mod, blocks)) else confirm = true
-        }) { Text("Обновить код из блоков") }
+        Text(
+            if (manual) "Код изменён вручную: блоки больше на него не влияют."
+            else "Код создаётся из блоков сам. Если изменишь его здесь, блоки перестанут на него влиять.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        if (manual) {
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = { onCode("") }) { Text("Вернуть код из блоков") }
+        }
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
-            value = code,
+            value = shown,
             onValueChange = onCode,
             textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp),
             visualTransformation = highlight,
             modifier = Modifier.fillMaxWidth().weight(1f)
         )
     }
+}
 
-    if (confirm) {
-        AlertDialog(
-            onDismissRequest = { confirm = false },
-            title = { Text("Заменить код?") },
-            text = { Text("Код будет создан заново из блоков. Твои ручные правки пропадут.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    onCode(generateJava(mod, blocks))
-                    confirm = false
-                }) { Text("Заменить") }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirm = false }) { Text("Отмена") }
-            }
+@Composable
+fun BuildTab(mod: ModProject, ui: BuildUi, onStart: () -> Unit) {
+    val context = LocalContext.current
+    val supported = buildSupported(mod)
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text("Сборка мода", style = MaterialTheme.typography.titleLarge)
+        Text(
+            "Мод отправится в твой приватный репозиторий на GitHub, там соберётся .jar, " +
+                "и приложение скачает его в «Загрузки/BlockModStudio».",
+            style = MaterialTheme.typography.bodyMedium
         )
+        if (!supported) {
+            Text(
+                "Для ${mod.loader} ${mod.mcVersion} сборка пока не поддерживается. " +
+                    "Сейчас работает: Fabric 1.21.1, Fabric 1.20.1 и Forge 1.20.1.",
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+        Button(onClick = onStart, enabled = supported && !ui.running) {
+            Text(if (ui.running) "Идёт сборка…" else "Собрать мод")
+        }
+        if (ui.running) {
+            LinearProgressIndicator(Modifier.fillMaxWidth())
+            Text(ui.status)
+        }
+        ui.result?.let { r ->
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        if (r.ok) "Готово ✅" else "Сборка не удалась ❌",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(r.message)
+                    if (r.errors.isNotEmpty()) {
+                        Text("Ошибки из лога (можно выделить и скопировать):",
+                            style = MaterialTheme.typography.labelMedium)
+                        SelectionContainer {
+                            Text(
+                                r.errors.joinToString("\n"),
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+                    if (r.runUrl != null) {
+                        TextButton(onClick = {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(r.runUrl)))
+                        }) { Text("Открыть на GitHub") }
+                    }
+                }
+            }
+        }
     }
 }
 
