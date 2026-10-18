@@ -12,144 +12,187 @@ fun safeId(s: String, fallback: String): String {
     }
 }
 
+fun modIdOf(mod: ModProject): String {
+    val t = safeId(mod.name, "")
+    return if (t.length >= 2) t.take(40)
+    else "mod_" + mod.id.filter { it.isLetterOrDigit() }.take(6).lowercase()
+}
+
 private fun esc(s: String): String =
-    s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ")
+    s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ").replace("\r", " ")
+
+private fun itemId(s: String): String {
+    val t = s.trim().lowercase().replace(" ", "")
+    return if (t.contains(':')) t else "minecraft:$t"
+}
+
+private fun num(s: String, min: Int, max: Int, def: Int): Int =
+    (s.trim().toIntOrNull() ?: def).coerceIn(min, max)
+
+// Команды внутри скрипта. В коде всегда есть переменная player.
+private fun body(kids: List<ModBlock>, indent: String, depth: Int, out: MutableList<String>) {
+    kids.forEach { k ->
+        when (k.type) {
+            "say" -> out.add("${indent}player.sendSystemMessage(Component.literal(\"${esc(k.a)}\"));")
+            "give" -> out.add(
+                "${indent}player.addItem(new ItemStack(BuiltInRegistries.ITEM.get(ResourceLocation.tryParse(\"${esc(itemId(k.a))}\")), ${num(k.b, 1, 64, 1)}));"
+            )
+            "heal" -> out.add("${indent}player.setHealth(player.getMaxHealth());")
+            "repeat" -> {
+                out.add("${indent}for (int i$depth = 0; i$depth < ${num(k.a, 0, 1000, 1)}; i$depth++) {")
+                body(k.kids, "$indent    ", depth + 1, out)
+                out.add("$indent}")
+            }
+            "if_sneak" -> {
+                out.add("${indent}if (player.isShiftKeyDown()) {")
+                body(k.kids, "$indent    ", depth + 1, out)
+                out.add("$indent}")
+            }
+        }
+    }
+}
 
 fun generateJava(mod: ModProject, blocks: List<ModBlock>): String {
-    val modId = safeId(mod.name, "mymod")
+    val modId = modIdOf(mod)
     return if (mod.loader == "Forge") forgeCode(mod, modId, blocks) else fabricCode(mod, modId, blocks)
 }
 
 private fun fabricCode(mod: ModProject, modId: String, blocks: List<ModBlock>): String {
     val l = ArrayList<String>()
-    l += "// Fabric, Minecraft ${mod.mcVersion}."
-    l += "// В разных версиях Minecraft названия некоторых классов отличаются."
-    l += "package com.example.$modId;"
-    l += ""
-    l += "import net.fabricmc.api.ModInitializer;"
-    l += "import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;"
-    l += "import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;"
-    l += "import net.minecraft.block.AbstractBlock;"
-    l += "import net.minecraft.block.Block;"
-    l += "import net.minecraft.item.BlockItem;"
-    l += "import net.minecraft.item.Item;"
-    l += "import net.minecraft.registry.Registries;"
-    l += "import net.minecraft.registry.Registry;"
-    l += "import net.minecraft.server.command.CommandManager;"
-    l += "import net.minecraft.text.Text;"
-    l += "import net.minecraft.util.Identifier;"
-    l += ""
-    l += "public class ModMain implements ModInitializer {"
-    l += "    public static final String MOD_ID = \"$modId\";"
-    l += ""
-    l += "    @Override"
-    l += "    public void onInitialize() {"
+    l.add("// Создано BlockMod Studio (Fabric, Minecraft ${mod.mcVersion})")
+    l.add("package com.example.$modId;")
+    l.add("")
+    listOf(
+        "net.fabricmc.api.ModInitializer",
+        "net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback",
+        "net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents",
+        "net.minecraft.commands.Commands",
+        "net.minecraft.core.Registry",
+        "net.minecraft.core.registries.BuiltInRegistries",
+        "net.minecraft.network.chat.Component",
+        "net.minecraft.resources.ResourceLocation",
+        "net.minecraft.server.level.ServerPlayer",
+        "net.minecraft.world.item.BlockItem",
+        "net.minecraft.world.item.Item",
+        "net.minecraft.world.item.ItemStack",
+        "net.minecraft.world.level.block.Block",
+        "net.minecraft.world.level.block.state.BlockBehaviour"
+    ).forEach { l.add("import $it;") }
+    l.add("")
+    l.add("public class ModMain implements ModInitializer {")
+    l.add("    public static final String MOD_ID = \"$modId\";")
+    l.add("")
+    l.add("    @Override")
+    l.add("    public void onInitialize() {")
     blocks.forEach { b ->
         when (b.type) {
             "item" -> {
                 val id = safeId(b.a, "thing")
-                l += "        // Предмет: ${esc(b.b)}"
-                l += "        Registry.register(Registries.ITEM, Identifier.of(MOD_ID, \"$id\"), new Item(new Item.Settings()));"
+                l.add("        Registry.register(BuiltInRegistries.ITEM, ResourceLocation.tryParse(MOD_ID + \":$id\"), new Item(new Item.Properties()));")
             }
             "block" -> {
                 val id = safeId(b.a, "thing")
-                l += "        // Блок: ${esc(b.b)}"
-                l += "        Block ${id}Block = Registry.register(Registries.BLOCK, Identifier.of(MOD_ID, \"$id\"), new Block(AbstractBlock.Settings.create()));"
-                l += "        Registry.register(Registries.ITEM, Identifier.of(MOD_ID, \"$id\"), new BlockItem(${id}Block, new Item.Settings()));"
+                l.add("        Block blk_$id = Registry.register(BuiltInRegistries.BLOCK, ResourceLocation.tryParse(MOD_ID + \":$id\"), new Block(BlockBehaviour.Properties.of()));")
+                l.add("        Registry.register(BuiltInRegistries.ITEM, ResourceLocation.tryParse(MOD_ID + \":$id\"), new BlockItem(blk_$id, new Item.Properties()));")
             }
-            "command" -> {
-                val name = safeId(b.a, "hello")
-                l += "        CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->"
-                l += "            dispatcher.register(CommandManager.literal(\"$name\").executes(context -> {"
-                l += "                context.getSource().sendFeedback(() -> Text.literal(\"${esc(b.b)}\"), false);"
-                l += "                return 1;"
-                l += "            })));"
+            "on_command" -> {
+                l.add("        CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->")
+                l.add("            dispatcher.register(Commands.literal(\"${safeId(b.a, "hello")}\").executes(context -> {")
+                l.add("                ServerPlayer player = context.getSource().getPlayerOrException();")
+                body(b.kids, "                ", 1, l)
+                l.add("                return 1;")
+                l.add("            })));")
             }
-            "join" -> {
-                l += "        ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->"
-                l += "            handler.player.sendMessage(Text.literal(\"${esc(b.a)}\"), false));"
+            "on_join" -> {
+                l.add("        ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {")
+                l.add("            ServerPlayer player = handler.player;")
+                body(b.kids, "            ", 1, l)
+                l.add("        });")
             }
         }
     }
-    l += "    }"
-    l += "}"
+    l.add("    }")
+    l.add("}")
     return l.joinToString("\n")
 }
 
 private fun forgeCode(mod: ModProject, modId: String, blocks: List<ModBlock>): String {
     val l = ArrayList<String>()
-    l += "// Forge, Minecraft ${mod.mcVersion}."
-    l += "// В разных версиях Minecraft названия некоторых классов отличаются."
-    l += "package com.example.$modId;"
-    l += ""
-    l += "import net.minecraft.commands.Commands;"
-    l += "import net.minecraft.network.chat.Component;"
-    l += "import net.minecraft.world.item.BlockItem;"
-    l += "import net.minecraft.world.item.Item;"
-    l += "import net.minecraft.world.level.block.Block;"
-    l += "import net.minecraft.world.level.block.state.BlockBehaviour;"
-    l += "import net.minecraftforge.common.MinecraftForge;"
-    l += "import net.minecraftforge.event.RegisterCommandsEvent;"
-    l += "import net.minecraftforge.event.entity.player.PlayerEvent;"
-    l += "import net.minecraftforge.eventbus.api.IEventBus;"
-    l += "import net.minecraftforge.eventbus.api.SubscribeEvent;"
-    l += "import net.minecraftforge.fml.common.Mod;"
-    l += "import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;"
-    l += "import net.minecraftforge.registries.DeferredRegister;"
-    l += "import net.minecraftforge.registries.ForgeRegistries;"
-    l += "import net.minecraftforge.registries.RegistryObject;"
-    l += ""
-    l += "@Mod(ModMain.MOD_ID)"
-    l += "public class ModMain {"
-    l += "    public static final String MOD_ID = \"$modId\";"
-    l += "    public static final DeferredRegister<Item> ITEMS = DeferredRegister.create(ForgeRegistries.ITEMS, MOD_ID);"
-    l += "    public static final DeferredRegister<Block> BLOCKS = DeferredRegister.create(ForgeRegistries.BLOCKS, MOD_ID);"
-    l += ""
+    l.add("// Создано BlockMod Studio (Forge, Minecraft ${mod.mcVersion})")
+    l.add("package com.example.$modId;")
+    l.add("")
+    listOf(
+        "net.minecraft.commands.Commands",
+        "net.minecraft.core.registries.BuiltInRegistries",
+        "net.minecraft.network.chat.Component",
+        "net.minecraft.resources.ResourceLocation",
+        "net.minecraft.server.level.ServerPlayer",
+        "net.minecraft.world.item.BlockItem",
+        "net.minecraft.world.item.Item",
+        "net.minecraft.world.item.ItemStack",
+        "net.minecraft.world.level.block.Block",
+        "net.minecraft.world.level.block.state.BlockBehaviour",
+        "net.minecraftforge.common.MinecraftForge",
+        "net.minecraftforge.event.RegisterCommandsEvent",
+        "net.minecraftforge.event.entity.player.PlayerEvent",
+        "net.minecraftforge.eventbus.api.IEventBus",
+        "net.minecraftforge.eventbus.api.SubscribeEvent",
+        "net.minecraftforge.fml.common.Mod",
+        "net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext",
+        "net.minecraftforge.registries.DeferredRegister",
+        "net.minecraftforge.registries.ForgeRegistries",
+        "net.minecraftforge.registries.RegistryObject"
+    ).forEach { l.add("import $it;") }
+    l.add("")
+    l.add("@Mod(ModMain.MOD_ID)")
+    l.add("public class ModMain {")
+    l.add("    public static final String MOD_ID = \"$modId\";")
+    l.add("    public static final DeferredRegister<Item> ITEMS = DeferredRegister.create(ForgeRegistries.ITEMS, MOD_ID);")
+    l.add("    public static final DeferredRegister<Block> BLOCKS = DeferredRegister.create(ForgeRegistries.BLOCKS, MOD_ID);")
+    l.add("")
     blocks.forEach { b ->
         val id = safeId(b.a, "thing")
         val c = id.uppercase()
-        when (b.type) {
-            "item" -> {
-                l += "    // Предмет: ${esc(b.b)}"
-                l += "    public static final RegistryObject<Item> $c = ITEMS.register(\"$id\", () -> new Item(new Item.Properties()));"
-            }
-            "block" -> {
-                l += "    // Блок: ${esc(b.b)}"
-                l += "    public static final RegistryObject<Block> $c = BLOCKS.register(\"$id\", () -> new Block(BlockBehaviour.Properties.of()));"
-                l += "    public static final RegistryObject<Item> ${c}_ITEM = ITEMS.register(\"$id\", () -> new BlockItem($c.get(), new Item.Properties()));"
-            }
+        if (b.type == "item") {
+            l.add("    public static final RegistryObject<Item> ITEM_$c = ITEMS.register(\"$id\", () -> new Item(new Item.Properties()));")
+        }
+        if (b.type == "block") {
+            l.add("    public static final RegistryObject<Block> BLOCK_$c = BLOCKS.register(\"$id\", () -> new Block(BlockBehaviour.Properties.of()));")
+            l.add("    public static final RegistryObject<Item> BLOCK_${c}_ITEM = ITEMS.register(\"$id\", () -> new BlockItem(BLOCK_$c.get(), new Item.Properties()));")
         }
     }
-    l += ""
-    l += "    public ModMain() {"
-    l += "        IEventBus bus = FMLJavaModLoadingContext.get().getModEventBus();"
-    l += "        ITEMS.register(bus);"
-    l += "        BLOCKS.register(bus);"
-    l += "        MinecraftForge.EVENT_BUS.register(this);"
-    l += "    }"
-    val commands = blocks.filter { it.type == "command" }
+    l.add("")
+    l.add("    public ModMain() {")
+    l.add("        IEventBus bus = FMLJavaModLoadingContext.get().getModEventBus();")
+    l.add("        ITEMS.register(bus);")
+    l.add("        BLOCKS.register(bus);")
+    l.add("        MinecraftForge.EVENT_BUS.register(this);")
+    l.add("    }")
+
+    val commands = blocks.filter { it.type == "on_command" }
     if (commands.isNotEmpty()) {
-        l += ""
-        l += "    @SubscribeEvent"
-        l += "    public void onCommands(RegisterCommandsEvent event) {"
+        l.add("")
+        l.add("    @SubscribeEvent")
+        l.add("    public void onCommands(RegisterCommandsEvent event) {")
         commands.forEach { b ->
-            l += "        event.getDispatcher().register(Commands.literal(\"${safeId(b.a, "hello")}\").executes(context -> {"
-            l += "            context.getSource().sendSuccess(() -> Component.literal(\"${esc(b.b)}\"), false);"
-            l += "            return 1;"
-            l += "        }));"
+            l.add("        event.getDispatcher().register(Commands.literal(\"${safeId(b.a, "hello")}\").executes(context -> {")
+            l.add("            ServerPlayer player = context.getSource().getPlayerOrException();")
+            body(b.kids, "            ", 1, l)
+            l.add("            return 1;")
+            l.add("        }));")
         }
-        l += "    }"
+        l.add("    }")
     }
-    val joins = blocks.filter { it.type == "join" }
+
+    val joins = blocks.filter { it.type == "on_join" }
     if (joins.isNotEmpty()) {
-        l += ""
-        l += "    @SubscribeEvent"
-        l += "    public void onJoin(PlayerEvent.PlayerLoggedInEvent event) {"
-        joins.forEach { b ->
-            l += "        event.getEntity().sendSystemMessage(Component.literal(\"${esc(b.a)}\"));"
-        }
-        l += "    }"
+        l.add("")
+        l.add("    @SubscribeEvent")
+        l.add("    public void onJoin(PlayerEvent.PlayerLoggedInEvent event) {")
+        l.add("        if (!(event.getEntity() instanceof ServerPlayer player)) return;")
+        joins.forEach { b -> body(b.kids, "        ", 1, l) }
+        l.add("    }")
     }
-    l += "}"
+    l.add("}")
     return l.joinToString("\n")
 }
